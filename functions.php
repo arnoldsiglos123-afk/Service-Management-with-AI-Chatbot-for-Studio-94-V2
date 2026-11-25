@@ -175,6 +175,161 @@ function ensureDatabaseSchema(PDO $pdo): void
                 }
             }
         }
+
+        // --- 5. Check inventory table ---
+        $invStmt = $pdo->query("SHOW TABLES LIKE 'inventory'");
+        if ($invStmt && $invStmt->fetch()) {
+            $invCols = $pdo->query("SHOW COLUMNS FROM inventory")->fetchAll(PDO::FETCH_COLUMN);
+            $invNeeded = [
+                'is_reusable' => "ALTER TABLE inventory ADD COLUMN is_reusable TINYINT(1) NOT NULL DEFAULT 0",
+                'max_usage'   => "ALTER TABLE inventory ADD COLUMN max_usage INT DEFAULT NULL"
+            ];
+            foreach ($invNeeded as $invCol => $invSql) {
+                if (!in_array($invCol, $invCols, true)) {
+                    try {
+                        $pdo->exec($invSql);
+                    } catch (Throwable $e) {
+                        error_log('[STUDIO94] Inventory column migration: ' . $e->getMessage());
+                    }
+                }
+            }
+        }
+
+        // --- 6. Extra columns used by notifications, packages, payments, feedback ---
+        $extraColumns = [
+            'notifications' => [
+                'link' => "ALTER TABLE notifications ADD COLUMN link VARCHAR(255) DEFAULT NULL"
+            ],
+            'packages' => [
+                'image' => "ALTER TABLE packages ADD COLUMN image VARCHAR(255) DEFAULT NULL"
+            ],
+            'payments' => [
+                'refund_date'      => "ALTER TABLE payments ADD COLUMN refund_date DATETIME DEFAULT NULL",
+                'refunded_by'      => "ALTER TABLE payments ADD COLUMN refunded_by INT UNSIGNED DEFAULT NULL",
+                'refund_reference' => "ALTER TABLE payments ADD COLUMN refund_reference VARCHAR(100) DEFAULT NULL"
+            ],
+            'feedback' => [
+                'ai_sentiment'       => "ALTER TABLE feedback ADD COLUMN ai_sentiment VARCHAR(30) DEFAULT NULL",
+                'ai_category'        => "ALTER TABLE feedback ADD COLUMN ai_category VARCHAR(60) DEFAULT NULL",
+                'ai_summary'         => "ALTER TABLE feedback ADD COLUMN ai_summary TEXT DEFAULT NULL",
+                'ai_suggested_reply' => "ALTER TABLE feedback ADD COLUMN ai_suggested_reply TEXT DEFAULT NULL",
+                'ai_analyzed_at'     => "ALTER TABLE feedback ADD COLUMN ai_analyzed_at DATETIME DEFAULT NULL",
+                'reply_message'      => "ALTER TABLE feedback ADD COLUMN reply_message TEXT DEFAULT NULL",
+                'reply_sent_at'      => "ALTER TABLE feedback ADD COLUMN reply_sent_at DATETIME DEFAULT NULL",
+                'replied_by'         => "ALTER TABLE feedback ADD COLUMN replied_by INT UNSIGNED DEFAULT NULL"
+            ]
+        ];
+
+        foreach ($extraColumns as $table => $columns) {
+
+            $tableExists = $pdo->query(
+                "SHOW TABLES LIKE " . $pdo->quote($table)
+            );
+
+            if (!$tableExists || !$tableExists->fetch()) {
+                continue;
+            }
+
+            $currentCols = $pdo->query(
+                "SHOW COLUMNS FROM `$table`"
+            )->fetchAll(PDO::FETCH_COLUMN);
+
+            foreach ($columns as $column => $alterSql) {
+
+                if (in_array($column, $currentCols, true)) {
+                    continue;
+                }
+
+                try {
+                    $pdo->exec($alterSql);
+                } catch (Throwable $e) {
+                    error_log(
+                        '[STUDIO94] Column migration (' .
+                        $table . '.' . $column . '): ' .
+                        $e->getMessage()
+                    );
+                }
+            }
+        }
+
+        // --- 7. Tables used by inventory, push notifications and the chatbot ---
+        $missingTables = [
+            'package_inventory' => "
+                CREATE TABLE IF NOT EXISTS package_inventory (
+                    id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    package_id   INT UNSIGNED NOT NULL,
+                    inventory_id INT UNSIGNED NOT NULL,
+                    quantity     INT NOT NULL DEFAULT 1,
+                    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uniq_package_inventory (package_id, inventory_id),
+                    KEY idx_inventory (inventory_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ",
+            'booking_inventory' => "
+                CREATE TABLE IF NOT EXISTS booking_inventory (
+                    id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    booking_id   INT UNSIGNED NOT NULL,
+                    inventory_id INT UNSIGNED NOT NULL,
+                    quantity     INT NOT NULL DEFAULT 1,
+                    used_at      DATETIME DEFAULT NULL,
+                    returned_at  DATETIME DEFAULT NULL,
+                    KEY idx_booking (booking_id),
+                    KEY idx_inventory (inventory_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ",
+            'push_subscriptions' => "
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    user_id    INT UNSIGNED NOT NULL,
+                    endpoint   VARCHAR(500) NOT NULL,
+                    auth_key   VARCHAR(255) DEFAULT NULL,
+                    p256dh_key VARCHAR(255) DEFAULT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    KEY idx_user (user_id),
+                    KEY idx_endpoint (endpoint(191))
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ",
+            'chat_history' => "
+                CREATE TABLE IF NOT EXISTS chat_history (
+                    id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    user_id    INT UNSIGNED NOT NULL,
+                    message    TEXT DEFAULT NULL,
+                    reply      TEXT DEFAULT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    KEY idx_user (user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ",
+            'chat_sessions' => "
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    user_id    INT UNSIGNED DEFAULT NULL,
+                    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ended_at   DATETIME DEFAULT NULL,
+                    KEY idx_user (user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ",
+            'chat_messages' => "
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    session_id INT UNSIGNED NOT NULL,
+                    type       VARCHAR(20) NOT NULL DEFAULT 'user',
+                    message    TEXT DEFAULT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    KEY idx_session (session_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            "
+        ];
+
+        foreach ($missingTables as $table => $ddl) {
+            try {
+                $pdo->exec($ddl);
+            } catch (Throwable $e) {
+                error_log(
+                    '[STUDIO94] Table migration (' . $table . '): ' .
+                    $e->getMessage()
+                );
+            }
+        }
     } catch (Throwable $e) {
         error_log('[STUDIO94] Schema auto-migration notice: ' . $e->getMessage());
     }

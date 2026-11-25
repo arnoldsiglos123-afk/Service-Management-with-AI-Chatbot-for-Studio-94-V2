@@ -173,6 +173,14 @@ ini_set('display_errors', '0');
 ini_set('display_startup_errors', '1');
 ini_set('log_errors', '1');
 
+// Temporary on-screen errors for deployment debugging.
+// Set APP_DEBUG=1 in Railway, reproduce the problem, then DELETE the variable.
+$appDebug = $_ENV['APP_DEBUG'] ?? getenv('APP_DEBUG');
+if (!empty($appDebug) && $appDebug !== '0') {
+    ini_set('display_errors', '1');
+    ini_set('display_startup_errors', '1');
+}
+
 // Writing errors to a file makes them invisible on Railway, where the container
 // filesystem is discarded and the log stream is the only place output survives.
 // Detect Railway (it sets RAILWAY_ENVIRONMENT automatically) and let PHP log to
@@ -193,7 +201,7 @@ register_shutdown_function(static function (): void {
         "[UA-FATAL] %s in %s:%d\n%s\n",
         $err['message'],
         $err['file'],
-        $err['error_line'],
+        $err['line'],
         $err['message']
     );
     if (defined('STDERR')) {
