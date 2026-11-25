@@ -33,6 +33,60 @@ function loadEnv($path = __DIR__ . '/.env') {
 loadEnv();
 
 // ============================================================
+// MBSTRING FALLBACKS
+// Railway's PHP image does not always enable ext-mbstring, and a
+// missing mb_* function is a fatal Error that renders a blank page
+// (this is what broke sidebar.php). These fallbacks are only defined
+// when the real extension is absent, and are UTF-8 aware where it
+// matters. Enable mbstring in the build for exact behaviour.
+// ============================================================
+if (!function_exists('mb_strlen')) {
+    function mb_strlen($string, $encoding = null)
+    {
+        // Count characters by dropping UTF-8 continuation bytes.
+        return strlen(
+            preg_replace('/[\x80-\xBF]/', '', (string)$string)
+        );
+    }
+}
+
+if (!function_exists('mb_substr')) {
+    function mb_substr($string, $start, $length = null, $encoding = null)
+    {
+        $chars = preg_split(
+            '//u',
+            (string)$string,
+            -1,
+            PREG_SPLIT_NO_EMPTY
+        );
+
+        if ($chars === false) {
+            $chars = str_split((string)$string);
+        }
+
+        $slice = $length === null
+            ? array_slice($chars, (int)$start)
+            : array_slice($chars, (int)$start, (int)$length);
+
+        return implode('', $slice);
+    }
+}
+
+if (!function_exists('mb_strtolower')) {
+    function mb_strtolower($string, $encoding = null)
+    {
+        return strtolower((string)$string);
+    }
+}
+
+if (!function_exists('mb_strpos')) {
+    function mb_strpos($haystack, $needle, $offset = 0, $encoding = null)
+    {
+        return strpos((string)$haystack, (string)$needle, (int)$offset);
+    }
+}
+
+// ============================================================
 // ✅ NEW: TIMEZONE — Philippines Standard Time (PHT / UTC+8)
 // ============================================================
 // This ensures that all date() and time() functions throughout the
